@@ -1,3 +1,4 @@
+#Adopted from [https://github.com/chengzeyi/ParaAttention] 
 import contextlib
 import dataclasses
 from collections import defaultdict
@@ -289,13 +290,10 @@ def are_two_tensors_similar(t1, t2, *, threshold, parallelized=False):
     mean_diff = (t1 - t2).abs().mean()
     mean_t1 = t1.abs().mean()
 
-    # --- REPLACEMENT LOGIC ---
     if parallelized and dist.is_available() and dist.is_initialized():
-        # This function operates IN-PLACE, modifying the tensor directly.
         dist.all_reduce(mean_diff, op=dist.ReduceOp.AVG)
         dist.all_reduce(mean_t1, op=dist.ReduceOp.AVG)
         
-        # Original lines (can be removed):
         # mean_diff = DP.all_reduce_sync(mean_diff, "avg")
         # mean_t1 = DP.all_reduce_sync(mean_t1, "avg")
 
@@ -423,41 +421,30 @@ class CachedTransformerBlocks(torch.nn.Module):
         taylorseer = cache_context.get_taylorseer()
         current_step = taylorseer.current_step
 
-        # --- THE DEFINITIVE LOGIC ---
-        # The first pass in a step is `cond`, the second is `uncond`.
-        # The `is_alter_cache` flag flips between them. Let's assume the first
-        # pass sets it to True. We will ONLY cache the conditional pass.
-        # Note: You might need to flip the bool if your `cond` pass corresponds to `is_alter_cache=False`.
         is_conditional_pass = cache_context.is_alter_cache 
         
         should_compute = True # Default to full compute
         if is_conditional_pass:
-            # Only apply caching logic for the complex conditional pass
             should_compute = taylorseer.should_compute_full()
 
         if should_compute:
-            # For the uncond pass OR a forced compute on the cond pass
             if not is_conditional_pass:
-                 print(f"Step {current_step}: [UNCOND PASS] 💠 Always computing fully for quality.")
+                 print(f"Step {current_step}: [UNCOND PASS] Always computing fully for quality.")
             else:
-                 print(f"Step {current_step}: [COND PASS - COMPUTE] ❌ Computing fully based on interval.")
+                 print(f"Step {current_step}: [COND PASS - COMPUTE] Computing fully based on interval.")
             
-            # --- FULL COMPUTATION PATH ---
             original_hidden_states = hidden_states
             for block in self.transformer_blocks:
                 output = block(hidden_states, *args, **kwargs)
                 hidden_states = output[0] if isinstance(output, tuple) else output
             
             final_residual = hidden_states - original_hidden_states
-            # Only update the cache state if we are on the conditional pass
             if is_conditional_pass:
                 taylorseer.update(final_residual)
 
         else:
-            # This block now ONLY runs for the conditional pass on a cache hit
-            print(f"Step {current_step}: [COND PASS - HIT] ✅ Approximating with TaylorSeer.")
+            print(f"Step {current_step}: [COND PASS - HIT] Approximating with TaylorSeer.")
             
-            # --- APPROXIMATION PATH ---
             approximated_residual = taylorseer.approximate_value()
             
             first_block_output = self.transformer_blocks[0](hidden_states, *args, **kwargs)
@@ -475,12 +462,10 @@ class CachedTransformerBlocks(torch.nn.Module):
     def call_remaining_transformer_blocks(self, hidden_states, *args, **kwargs):
         original_hidden_states = hidden_states
         
-        # Extract original encoder_hidden_states for calculating the residual later
         original_encoder_hidden_states = kwargs.get('context', None)
         current_encoder_hidden_states = original_encoder_hidden_states
 
         for block in self.transformer_blocks[1:]:
-            # Pass arguments through transparently
             output = block(hidden_states, *args, **kwargs)
             if isinstance(output, tuple):
                 hidden_states = output[0]
@@ -490,9 +475,7 @@ class CachedTransformerBlocks(torch.nn.Module):
         hidden_states_residual = hidden_states - original_hidden_states
         
         encoder_hidden_states_residual = None
-        # We assume encoder_hidden_states is not modified by the blocks
         if current_encoder_hidden_states is not None and original_encoder_hidden_states is not None:
-             # If it could be modified, the new value would need to be retrieved from the final block's output
              encoder_hidden_states_residual = current_encoder_hidden_states - original_encoder_hidden_states
 
         return hidden_states, current_encoder_hidden_states, hidden_states_residual, encoder_hidden_states_residual
