@@ -1,4 +1,4 @@
-# Copyright 2024-2025 The Alibaba Wan Team Authors. All rights reserved.
+# Adopted from WAN2.2 codebase [https://github.com/Wan-Video/Wan2.2/]
 import gc
 import logging
 import math
@@ -25,8 +25,8 @@ from .utils.fm_solvers import (
     get_sampling_sigmas,
     retrieve_timesteps,
 )
-import wan.taylor_seer_utils as utils
-from wan.wan_adapter import apply_cache_on_transformer
+import wan.taylorseer.taylor_seer_utils as utils
+from wan.taylorseer.wan_adapter import apply_cache_on_transformer
 
 class WanT2V:
 
@@ -43,32 +43,6 @@ class WanT2V:
         init_on_cpu=True,
         convert_model_dtype=False,
     ):
-        r"""
-        Initializes the Wan text-to-video generation model components.
-
-        Args:
-            config (EasyDict):
-                Object containing model parameters initialized from config.py
-            checkpoint_dir (`str`):
-                Path to directory containing model checkpoints
-            device_id (`int`,  *optional*, defaults to 0):
-                Id of target GPU device
-            rank (`int`,  *optional*, defaults to 0):
-                Process rank for distributed training
-            t5_fsdp (`bool`, *optional*, defaults to False):
-                Enable FSDP sharding for T5 model
-            dit_fsdp (`bool`, *optional*, defaults to False):
-                Enable FSDP sharding for DiT model
-            use_sp (`bool`, *optional*, defaults to False):
-                Enable distribution strategy of sequence parallel.
-            t5_cpu (`bool`, *optional*, defaults to False):
-                Whether to place T5 model on CPU. Only works without t5_fsdp.
-            init_on_cpu (`bool`, *optional*, defaults to True):
-                Enable initializing Transformer Model on CPU. Only works without FSDP or USP.
-            convert_model_dtype (`bool`, *optional*, defaults to False):
-                Convert DiT model parameters dtype to 'config.param_dtype'.
-                Only works without FSDP.
-        """
         self.device = torch.device(f"cuda:{device_id}")
         self.config = config
         self.rank = rank
@@ -129,29 +103,7 @@ class WanT2V:
 
     def _configure_model(self, model, use_sp, dit_fsdp, shard_fn,
                          convert_model_dtype):
-        """
-        Configures a model object. This includes setting evaluation modes,
-        applying distributed parallel strategy, and handling device placement.
-
-        Args:
-            model (torch.nn.Module):
-                The model instance to configure.
-            use_sp (`bool`):
-                Enable distribution strategy of sequence parallel.
-            dit_fsdp (`bool`):
-                Enable FSDP sharding for DiT model.
-            shard_fn (callable):
-                The function to apply FSDP sharding.
-            convert_model_dtype (`bool`):
-                Convert DiT model parameters dtype to 'config.param_dtype'.
-                Only works without FSDP.
-
-        Returns:
-            torch.nn.Module:
-                The configured model.
-        """
         model.eval().requires_grad_(False)
-
         if use_sp:
             for block in model.blocks:
                 block.self_attn.forward = types.MethodType(
@@ -172,18 +124,14 @@ class WanT2V:
         return model
 
     def _prepare_model_for_timestep(self, t, boundary, offload_model):
-        # --- THIS IS THE NEW LOGIC ---
-        # Check if we just crossed the boundary from high-noise to low-noise
         if not self._cache_reset_done and t.item() < boundary:
             print("--- SWITCHING TO LOW-NOISE MODEL: RESETTING CACHE STATE! ---")
             cache_context = utils.get_current_cache_context()
             if cache_context and cache_context.taylorseer:
-                # Reset both the main and the alternate (cond/uncond) caches
                 cache_context.taylorseer.reset_cache()
                 if cache_context.alter_taylorseer:
                     cache_context.alter_taylorseer.reset_cache()
-            self._cache_reset_done = True # Set the flag so we don't reset again
-        # --- END OF NEW LOGIC ---
+            self._cache_reset_done = True 
 
         if t.item() >= boundary:
             required_model_name = 'high_noise_model'
@@ -218,42 +166,7 @@ class WanT2V:
                  taylorseer_warmup_steps: int = 4,
                  taylorseer_skip_interval: int = 2,
                  residual_diff_threshold=0.0):
-        r"""
-        Generates video frames from text prompt using diffusion process.
 
-        Args:
-            input_prompt (`str`):
-                Text prompt for content generation
-            size (`tuple[int]`, *optional*, defaults to (1280,720)):
-                Controls video resolution, (width,height).
-            frame_num (`int`, *optional*, defaults to 81):
-                How many frames to sample from a video. The number should be 4n+1
-            shift (`float`, *optional*, defaults to 5.0):
-                Noise schedule shift parameter. Affects temporal dynamics
-            sample_solver (`str`, *optional*, defaults to 'unipc'):
-                Solver used to sample the video.
-            sampling_steps (`int`, *optional*, defaults to 50):
-                Number of diffusion sampling steps. Higher values improve quality but slow generation
-            guide_scale (`float` or tuple[`float`], *optional*, defaults 5.0):
-                Classifier-free guidance scale. Controls prompt adherence vs. creativity.
-                If tuple, the first guide_scale will be used for low noise model and
-                the second guide_scale will be used for high noise model.
-            n_prompt (`str`, *optional*, defaults to ""):
-                Negative prompt for content exclusion. If not given, use `config.sample_neg_prompt`
-            seed (`int`, *optional*, defaults to -1):
-                Random seed for noise generation. If -1, use random seed.
-            offload_model (`bool`, *optional*, defaults to True):
-                If True, offloads models to CPU during generation to save VRAM
-
-        Returns:
-            torch.Tensor:
-                Generated video frames tensor. Dimensions: (C, N H, W) where:
-                - C: Color channels (3 for RGB)
-                - N: Number of frames (81)
-                - H: Frame height (from size)
-                - W: Frame width from size)
-        """
-        # preprocess
         guide_scale = (guide_scale, guide_scale) if isinstance(
             guide_scale, float) else guide_scale
         F = frame_num
@@ -309,7 +222,6 @@ class WanT2V:
         no_sync_high_noise = getattr(self.high_noise_model, 'no_sync',
                                      noop_no_sync)
 
-        # evaluation mode
         self._cache_reset_done = False
         with utils.cache_context(
             utils.create_cache_context(
