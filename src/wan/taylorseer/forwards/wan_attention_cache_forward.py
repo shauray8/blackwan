@@ -22,9 +22,6 @@ def wan_attention_cache_forward(sa_dict:Dict, ca_dict:Dict, ffn_dict:Dict, e:tup
     return x
 
 def cache_add(x, sa, ca, ffn, e):
-    """
-    FIXED: Squeeze extra dimensions from e[2] and e[5]
-    """
     # Squeeze the extra dimension from e[2] and e[5]
     e2_squeezed = e[2].squeeze(2)  # [1, 32760, 1, 5120] -> [1, 32760, 5120]
     e5_squeezed = e[5].squeeze(2)  # [1, 32760, 1, 5120] -> [1, 32760, 5120]
