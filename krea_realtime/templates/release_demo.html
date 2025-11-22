@@ -1,0 +1,1435 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Self-Forcing Text-to-Video Demo</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            color-scheme: dark;
+            font-family: "Inter", "Segoe UI", -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+            --bg: #0b1120;
+            --surface: rgba(15, 23, 42, 0.82);
+            --surface-soft: rgba(17, 24, 39, 0.72);
+            --border: rgba(148, 163, 184, 0.16);
+            --text-primary: #e2e8f0;
+            --text-muted: rgba(148, 163, 184, 0.78);
+            --accent: #38bdf8;
+            --accent-strong: #2563eb;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            background: var(--bg);
+            color: var(--text-primary);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: clamp(24px, 5vw, 64px);
+            font-family: inherit;
+        }
+
+        .page {
+            width: min(960px, 100%);
+            display: flex;
+            flex-direction: column;
+            gap: clamp(16px, 3vw, 28px);
+        }
+
+        .viewer {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .video-frame {
+            background: var(--surface);
+            border-radius: 18px;
+            border: 1px solid var(--border);
+            padding: clamp(12px, 3vw, 20px);
+        }
+
+        canvas {
+            width: 100%;
+            height: auto;
+            display: block;
+            border-radius: 12px;
+            background: #000;
+        }
+
+        .status-strip {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            font-size: 12px;
+            letter-spacing: 0.02em;
+            color: var(--text-muted);
+            padding: 4px 4px 0;
+            border-top: 1px solid var(--border);
+            padding-top: 12px;
+            flex-wrap: wrap;
+        }
+
+        .status-strip .readout {
+            display: inline-flex;
+            gap: 6px;
+            align-items: baseline;
+        }
+
+        .status-strip .readout span {
+            font-variant-numeric: tabular-nums;
+            color: var(--text-primary);
+        }
+
+        .control-surface {
+            background: var(--surface-soft);
+            border-radius: 18px;
+            border: 1px solid var(--border);
+            padding: clamp(20px, 4vw, 28px);
+            display: flex;
+            flex-direction: column;
+            gap: clamp(16px, 3vw, 26px);
+        }
+
+        .action-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 16px;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .button-row {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+
+        button {
+            appearance: none;
+            border: none;
+            border-radius: 12px;
+            padding: 11px 22px;
+            font-size: 14px;
+            font-weight: 600;
+            letter-spacing: 0.02em;
+            cursor: pointer;
+            transition: transform 0.18s ease, box-shadow 0.18s ease, opacity 0.2s ease;
+            background-size: 100%;
+        }
+
+        button.primary {
+            color: #0b1120;
+            background-image: linear-gradient(135deg, var(--accent), var(--accent-strong));
+        }
+
+        button.primary:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 12px 24px rgba(37, 99, 235, 0.28);
+        }
+
+        button.secondary {
+            color: var(--text-primary);
+            background: rgba(30, 41, 59, 0.85);
+            border: 1px solid rgba(148, 163, 184, 0.26);
+        }
+
+        button.secondary:hover:not(:disabled) {
+            transform: translateY(-1px);
+            box-shadow: 0 10px 20px rgba(15, 23, 42, 0.22);
+        }
+
+        button:disabled {
+            cursor: not-allowed;
+            opacity: 0.55;
+            transform: none;
+            box-shadow: none;
+        }
+
+        .slider-block {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex: 1;
+            min-width: 220px;
+        }
+
+        .slider-block label {
+            font-size: 12px;
+            letter-spacing: 0.02em;
+            color: var(--text-muted);
+        }
+
+        input[type="range"] {
+            flex: 1;
+            appearance: none;
+            height: 6px;
+            border-radius: 999px;
+            background: linear-gradient(90deg, rgba(56, 189, 248, 0.75), rgba(37, 99, 235, 0.65));
+        }
+
+        input[type="range"]::-webkit-slider-thumb {
+            appearance: none;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: #ffffff;
+            border: 2px solid rgba(37, 99, 235, 0.7);
+            box-shadow: 0 4px 12px rgba(37, 99, 235, 0.28);
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        input[type="range"]::-webkit-slider-thumb:hover {
+            transform: scale(1.05);
+            box-shadow: 0 6px 16px rgba(37, 99, 235, 0.38);
+        }
+
+        input[type="range"]::-moz-range-thumb {
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: #ffffff;
+            border: 2px solid rgba(37, 99, 235, 0.7);
+            box-shadow: 0 4px 12px rgba(37, 99, 235, 0.28);
+        }
+
+        label {
+            font-size: 12px;
+            letter-spacing: 0.02em;
+            text-transform: none;
+            color: var(--text-muted);
+        }
+
+        .prompt-block {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        textarea,
+        input[type="number"],
+        input[type="text"],
+        input[type="file"] {
+            width: 100%;
+            padding: 14px 16px;
+            border-radius: 12px;
+            border: 1px solid rgba(148, 163, 184, 0.22);
+            background: rgba(15, 23, 42, 0.72);
+            color: var(--text-primary);
+            font-size: 15px;
+            line-height: 1.5;
+            transition: border 0.2s ease, box-shadow 0.25s ease, transform 0.2s ease;
+            caret-color: var(--accent);
+        }
+
+        textarea {
+            min-height: 140px;
+            resize: vertical;
+        }
+
+        textarea::placeholder,
+        input::placeholder {
+            color: rgba(148, 163, 184, 0.55);
+        }
+
+        textarea:focus,
+        input[type="number"]:focus,
+        input[type="text"]:focus {
+            outline: none;
+            border-color: rgba(56, 189, 248, 0.6);
+            box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.2);
+            transform: translateY(-1px);
+        }
+
+        .param-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+            gap: 16px;
+        }
+
+        .field {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .seed-row {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .seed-row button {
+            padding: 10px 16px;
+            border-radius: 10px;
+            font-size: 13px;
+        }
+
+        .slider-field .slider-row {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .slider-value {
+            font-variant-numeric: tabular-nums;
+            font-weight: 600;
+            min-width: 32px;
+            text-align: right;
+            color: var(--text-primary);
+        }
+
+        .upload-field {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .upload-preview-container {
+            display: none;
+            margin-top: 12px;
+            border-radius: 12px;
+            overflow: hidden;
+            border: 1px solid var(--border);
+            background: rgba(0, 0, 0, 0.3);
+        }
+
+        .upload-preview-container.show {
+            display: block;
+        }
+
+        .upload-preview-container img,
+        .upload-preview-container video {
+            width: 100%;
+            height: auto;
+            display: block;
+            max-height: 240px;
+            object-fit: contain;
+        }
+
+        .upload-label {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .clear-upload-btn {
+            padding: 6px 12px;
+            font-size: 12px;
+            border-radius: 8px;
+            background: rgba(239, 68, 68, 0.15);
+            color: #f87171;
+            border: 1px solid rgba(239, 68, 68, 0.3);
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .clear-upload-btn:hover {
+            background: rgba(239, 68, 68, 0.25);
+            border-color: rgba(239, 68, 68, 0.5);
+        }
+
+        @media (max-width: 720px) {
+            .action-row {
+                flex-direction: column;
+                align-items: stretch;
+            }
+
+            .button-row {
+                width: 100%;
+            }
+
+            .button-row button {
+                flex: 1;
+            }
+
+            button {
+                width: 100%;
+            }
+
+            .seed-row {
+                flex-direction: column;
+                align-items: stretch;
+            }
+        }
+    </style>
+
+</head>
+<body>
+    <div class="page">
+        <section class="viewer">
+            <div id="videoDisplayContainer" style="display: flex; gap: 16px; flex-wrap: wrap;">
+                <div class="video-frame" style="flex: 1; min-width: 300px;">
+                    <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 8px; font-weight: 600;">Generated Output</div>
+                    <canvas id="videoCanvas" width="832" height="480"></canvas>
+                </div>
+                <div id="webcamDisplayContainer" class="video-frame" style="flex: 1; min-width: 300px; display: none;">
+                    <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 8px; font-weight: 600;">Webcam Input</div>
+                    <video id="webcamDisplayPreview" autoplay playsinline style="width: 100%; height: auto; display: block; border-radius: 12px; background: #000;"></video>
+                </div>
+            </div>
+            <div class="status-strip">
+                <span id="statusLine" class="status-text">Disconnected</span>
+                <span class="readout">Playback <span id="playbackFpsValue">8</span> fps</span>
+                <span class="readout">Blocks <span id="numBlocksStatusValue">9</span></span>
+            </div>
+        </section>
+
+        <section class="control-surface">
+            <div class="action-row">
+                <div class="button-row">
+                    <button id="startBtn" class="primary" type="button">Start</button>
+                    <button id="stopBtn" class="secondary" type="button" disabled>Stop</button>
+                    <button id="downloadBtn" class="secondary" type="button" disabled>Download Video</button>
+                </div>
+                <div class="slider-block">
+                    <label for="playbackFps">Playback</label>
+                    <input id="playbackFps" type="range" min="1" max="30" value="8">
+                </div>
+            </div>
+
+            <div class="field">
+                <label>Mode</label>
+                <div style="display: flex; gap: 16px; margin-top: 10px;">
+                    <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                        <input type="radio" name="mode" value="text2video" checked style="width: auto;">
+                        <span>Text-to-Video</span>
+                    </label>
+                    <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                        <input type="radio" name="mode" value="video2video" style="width: auto;">
+                        <span>Video-to-Video</span>
+                    </label>
+                    <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                        <input type="radio" name="mode" value="webcam" style="width: auto;">
+                        <span>Webcam</span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="prompt-block">
+                <label for="prompt">Prompt</label>
+                <textarea id="prompt" placeholder="Describe the short video you want to synthesize..."></textarea>
+            </div>
+
+            <div class="action-row">
+                <div class="slider-block">
+                    <label for="interpSteps">Blend Steps</label>
+                    <input id="interpSteps" type="range" min="1" max="16" value="4">
+                    <span id="interpStepsValue" class="slider-value">4</span>
+                </div>
+                <div class="button-row">
+                    <button id="applyPromptBtn" class="secondary" type="button">Apply Prompt</button>
+                </div>
+            </div>
+
+            <div class="field upload-field" id="videoUploadContainer">
+                <div class="upload-label">
+                    <label for="inputVideo">Input Video (optional)</label>
+                    <button id="clearVideoBtn" class="clear-upload-btn" style="display: none;" type="button">Clear</button>
+                </div>
+                <input id="inputVideo" type="file" accept="video/*">
+                <span id="videoStatus" style="font-size: 12px; color: var(--text-muted); margin-top: 6px; display: block;"></span>
+                <div id="videoPreview" class="upload-preview-container">
+                    <video id="videoPreviewElement" controls></video>
+                </div>
+            </div>
+
+            <div class="field" id="webcamContainer" style="display: none;">
+                <video id="webcamPreview" autoplay playsinline style="display: none;"></video>
+                <div class="slider-field">
+                    <label for="webcamFps">Webcam Capture FPS</label>
+                    <div class="slider-row">
+                        <input id="webcamFps" type="range" min="1" max="30" value="30">
+                        <span id="webcamFpsValue" class="slider-value">30</span>
+                    </div>
+                </div>
+            </div>
+
+            <div id="denoisingStrengthContainer" class="field slider-field" style="display: none;">
+                <label for="denoisingStrength">Denoising Strength</label>
+                <div class="slider-row">
+                    <input id="denoisingStrength" type="range" min="0.0" max="1.0" step="0.05" value="0.8">
+                    <span id="denoisingStrengthValue" class="slider-value">0.80</span>
+                </div>
+            </div>
+
+            <div class="field upload-field">
+                <div class="upload-label">
+                    <label for="startFrame">Start Frame Image (optional)</label>
+                    <button id="clearStartFrameBtn" class="clear-upload-btn" style="display: none;" type="button">Clear</button>
+                </div>
+                <input id="startFrame" type="file" accept="image/*">
+                <span id="startFrameStatus" style="font-size: 12px; color: var(--text-muted); margin-top: 6px; display: block;"></span>
+                <div id="startFramePreview" class="upload-preview-container">
+                    <img id="startFramePreviewElement" alt="Start frame preview">
+                </div>
+            </div>
+
+            <div class="param-grid">
+                <div class="field">
+                    <label for="width">Width (pixels)</label>
+                    <input id="width" type="number" min="64" step="8" value="832">
+                </div>
+                <div class="field">
+                    <label for="height">Height (pixels)</label>
+                    <input id="height" type="number" min="64" step="8" value="480">
+                </div>
+                <div class="field">
+                    <label for="seed">Seed (optional)</label>
+                    <div class="seed-row">
+                        <input id="seed" type="number" min="0" step="1" placeholder="random">
+                        <button id="randomSeedBtn" class="secondary" type="button">Randomize</button>
+                    </div>
+                </div>
+                <div class="field slider-field">
+                    <label for="numBlocks">Number of Blocks</label>
+                    <div class="slider-row">
+                        <input id="numBlocks" type="range" min="1" max="32" value="9">
+                        <span id="numBlocksValue" class="slider-value">9</span>
+                    </div>
+                </div>
+                <div class="field slider-field">
+                    <label for="numDenoisingSteps">Denoising Steps</label>
+                    <div class="slider-row">
+                        <input id="numDenoisingSteps" type="range" min="2" max="8" value="5">
+                        <span id="numDenoisingStepsValue" class="slider-value">5</span>
+                    </div>
+                </div>
+                <div class="field slider-field">
+                    <label for="timestepShift">Timestep Shift</label>
+                    <div class="slider-row">
+                        <input id="timestepShift" type="range" min="2" max="7" step="0.1" value="5.0">
+                        <span id="timestepShiftValue" class="slider-value">5.00</span>
+                    </div>
+                </div>
+            </div>
+</section>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/msgpack-lite/0.1.26/msgpack.min.js" integrity="sha512-ybfpeTdBPWgkSggCDzKHFOKRSjp6tYmddGdeSGcDGMtXJ632htiE/n9ceJ70KzOPMUYtI14jOgx06FG0jFbh/Q==" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@msgpack/msgpack@2.8.0/dist/msgpack.min.js" integrity="sha384-yVS19QlZIgJsCm2oAChAG0sEUcWRuIIs3y+jz3+bM5DN+JVpn2pDaE6AubutzIth" crossorigin="anonymous"></script>
+    <script>
+        (function () {
+            const builtinMsgPackEncode = (() => {
+                const textEncoder = new TextEncoder();
+
+                const ensureUint8Array = (value) => (value instanceof Uint8Array ? value : new Uint8Array(value));
+
+                const writeUInt8 = (buffer, value) => buffer.push(value & 0xff);
+                const writeUInt16 = (buffer, value) => {
+                    buffer.push((value >>> 8) & 0xff, value & 0xff);
+                };
+                const writeUInt32 = (buffer, value) => {
+                    buffer.push((value >>> 24) & 0xff, (value >>> 16) & 0xff, (value >>> 8) & 0xff, value & 0xff);
+                };
+                const writeInt8 = (buffer, value) => buffer.push(value & 0xff);
+                const writeInt16 = (buffer, value) => {
+                    buffer.push((value >>> 8) & 0xff, value & 0xff);
+                };
+                const writeInt32 = (buffer, value) => {
+                    buffer.push((value >>> 24) & 0xff, (value >>> 16) & 0xff, (value >>> 8) & 0xff, value & 0xff);
+                };
+                const writeFloat64 = (buffer, value) => {
+                    const array = new ArrayBuffer(8);
+                    new DataView(array).setFloat64(0, value);
+                    buffer.push(...new Uint8Array(array));
+                };
+
+                const encodeString = (buffer, value) => {
+                    const utf8 = ensureUint8Array(textEncoder.encode(value));
+                    const length = utf8.length;
+                    if (length <= 31) {
+                        writeUInt8(buffer, 0xa0 | length);
+                    } else if (length <= 0xff) {
+                        writeUInt8(buffer, 0xd9);
+                        writeUInt8(buffer, length);
+                    } else if (length <= 0xffff) {
+                        writeUInt8(buffer, 0xda);
+                        writeUInt16(buffer, length);
+                    } else {
+                        writeUInt8(buffer, 0xdb);
+                        writeUInt32(buffer, length);
+                    }
+                    buffer.push(...utf8);
+                };
+
+                const encodeNumber = (buffer, value) => {
+                    if (Number.isInteger(value)) {
+                        if (value >= 0 && value <= 0x7f) {
+                            writeUInt8(buffer, value);
+                        } else if (value < 0 && value >= -32) {
+                            writeInt8(buffer, value);
+                        } else if (value >= 0 && value <= 0xff) {
+                            writeUInt8(buffer, 0xcc);
+                            writeUInt8(buffer, value);
+                        } else if (value >= 0 && value <= 0xffff) {
+                            writeUInt8(buffer, 0xcd);
+                            writeUInt16(buffer, value);
+                        } else if (value >= 0 && value <= 0xffffffff) {
+                            writeUInt8(buffer, 0xce);
+                            writeUInt32(buffer, value);
+                        } else if (value >= -0x80 && value <= 0x7f) {
+                            writeUInt8(buffer, 0xd0);
+                            writeInt8(buffer, value);
+                        } else if (value >= -0x8000 && value <= 0x7fff) {
+                            writeUInt8(buffer, 0xd1);
+                            writeInt16(buffer, value);
+                        } else if (value >= -0x80000000 && value <= 0x7fffffff) {
+                            writeUInt8(buffer, 0xd2);
+                            writeInt32(buffer, value);
+                        } else {
+                            writeUInt8(buffer, 0xd3);
+                            const bigint = BigInt(value);
+                            const high = Number((bigint >> 32n) & 0xffffffffn);
+                            const low = Number(bigint & 0xffffffffn);
+                            writeInt32(buffer, high);
+                            writeInt32(buffer, low);
+                        }
+                    } else {
+                        writeUInt8(buffer, 0xcb);
+                        writeFloat64(buffer, value);
+                    }
+                };
+
+                const encodeArray = (buffer, value) => {
+                    const length = value.length;
+                    if (length < 16) {
+                        writeUInt8(buffer, 0x90 | length);
+                    } else if (length <= 0xffff) {
+                        writeUInt8(buffer, 0xdc);
+                        writeUInt16(buffer, length);
+                    } else {
+                        writeUInt8(buffer, 0xdd);
+                        writeUInt32(buffer, length);
+                    }
+                    value.forEach((item) => encodeValue(buffer, item));
+                };
+
+                const encodeObject = (buffer, value) => {
+                    const entries = Object.entries(value).filter(([, v]) => v !== undefined);
+                    const length = entries.length;
+                    if (length < 16) {
+                        writeUInt8(buffer, 0x80 | length);
+                    } else if (length <= 0xffff) {
+                        writeUInt8(buffer, 0xde);
+                        writeUInt16(buffer, length);
+                    } else {
+                        writeUInt8(buffer, 0xdf);
+                        writeUInt32(buffer, length);
+                    }
+                    for (const [key, entryValue] of entries) {
+                        encodeString(buffer, key);
+                        encodeValue(buffer, entryValue);
+                    }
+                };
+
+                function encodeValue(buffer, value) {
+                    if (value === null) {
+                        writeUInt8(buffer, 0xc0);
+                    } else if (value === false) {
+                        writeUInt8(buffer, 0xc2);
+                    } else if (value === true) {
+                        writeUInt8(buffer, 0xc3);
+                    } else if (typeof value === "number") {
+                        encodeNumber(buffer, value);
+                    } else if (typeof value === "string") {
+                        encodeString(buffer, value);
+                    } else if (Array.isArray(value)) {
+                        encodeArray(buffer, value);
+                    } else if (value instanceof Uint8Array) {
+                        const length = value.length;
+                        if (length <= 0xff) {
+                            writeUInt8(buffer, 0xc4);
+                            writeUInt8(buffer, length);
+                        } else if (length <= 0xffff) {
+                            writeUInt8(buffer, 0xc5);
+                            writeUInt16(buffer, length);
+                        } else {
+                            writeUInt8(buffer, 0xc6);
+                            writeUInt32(buffer, length);
+                        }
+                        buffer.push(...value);
+                    } else if (value && typeof value === "object") {
+                        encodeObject(buffer, value);
+                    } else {
+                        throw new Error("Unsupported type for MsgPack encoding");
+                    }
+                }
+
+                return (input) => {
+                    const buffer = [];
+                    encodeValue(buffer, input);
+                    return new Uint8Array(buffer);
+                };
+            })();
+
+            const promptInput = document.getElementById("prompt");
+            const widthInput = document.getElementById("width");
+            const heightInput = document.getElementById("height");
+            const seedInput = document.getElementById("seed");
+            const numBlocksInput = document.getElementById("numBlocks");
+            const numBlocksValue = document.getElementById("numBlocksValue");
+            const numBlocksStatusValue = document.getElementById("numBlocksStatusValue");
+            const startBtn = document.getElementById("startBtn");
+            const stopBtn = document.getElementById("stopBtn");
+            const downloadBtn = document.getElementById("downloadBtn");
+            const randomSeedBtn = document.getElementById("randomSeedBtn");
+            const playbackSlider = document.getElementById("playbackFps");
+            const playbackValue = document.getElementById("playbackFpsValue");
+            const statusLine = document.getElementById("statusLine");
+            const canvas = document.getElementById("videoCanvas");
+            const ctx = canvas.getContext("2d");
+            const inputVideoInput = document.getElementById("inputVideo");
+            const videoStatus = document.getElementById("videoStatus");
+            const denoisingStrengthContainer = document.getElementById("denoisingStrengthContainer");
+            const denoisingStrengthInput = document.getElementById("denoisingStrength");
+            const denoisingStrengthValue = document.getElementById("denoisingStrengthValue");
+            const timestepShiftInput = document.getElementById("timestepShift");
+            const timestepShiftValue = document.getElementById("timestepShiftValue");
+            const startFrameInput = document.getElementById("startFrame");
+            const startFrameStatus = document.getElementById("startFrameStatus");
+            const videoPreview = document.getElementById("videoPreview");
+            const videoPreviewElement = document.getElementById("videoPreviewElement");
+            const startFramePreview = document.getElementById("startFramePreview");
+            const startFramePreviewElement = document.getElementById("startFramePreviewElement");
+            const clearVideoBtn = document.getElementById("clearVideoBtn");
+            const clearStartFrameBtn = document.getElementById("clearStartFrameBtn");
+            const applyPromptBtn = document.getElementById("applyPromptBtn");
+            const interpStepsInput = document.getElementById("interpSteps");
+            const interpStepsValue = document.getElementById("interpStepsValue");
+            const numDenoisingStepsInput = document.getElementById("numDenoisingSteps");
+            const numDenoisingStepsValue = document.getElementById("numDenoisingStepsValue");
+
+            // Webcam elements
+            const modeRadios = document.querySelectorAll('input[name="mode"]');
+            const webcamContainer = document.getElementById("webcamContainer");
+            const videoUploadContainer = document.getElementById("videoUploadContainer");
+            const startFrameContainer = document.querySelector('.upload-field:has(#startFrame)');
+            const webcamPreview = document.getElementById("webcamPreview");
+            const webcamDisplayPreview = document.getElementById("webcamDisplayPreview");
+            const webcamDisplayContainer = document.getElementById("webcamDisplayContainer");
+            const webcamFpsInput = document.getElementById("webcamFps");
+            const webcamFpsValue = document.getElementById("webcamFpsValue");
+
+            let webcamStream = null;
+            let webcamCaptureInterval = null;
+            let currentMode = 'text2video';
+
+            // FPS tracking
+            let fpsFrameCount = 0;
+            let fpsLastTime = Date.now();
+            let currentFps = 0;
+
+            const setText = (element, value) => {
+                if (element) {
+                    element.textContent = value;
+                }
+            };
+
+            let websocket = null;
+            let decodeQueue = Promise.resolve();
+            let frameBuffer = [];
+            let playbackTimer = null;
+            let playbackFps = Number(playbackSlider?.value || 8);
+            setText(playbackValue, String(playbackFps));
+            let uploadedVideoPath = null;
+            let uploadedStartFramePath = null;
+            let currentSessionId = null;
+
+            const syncNumBlocksDisplay = (value) => {
+                const normalizedValue = String(value);
+                setText(numBlocksValue, normalizedValue);
+                setText(numBlocksStatusValue, normalizedValue);
+            };
+
+            const log = (message) => {
+                const timestamp = new Date().toLocaleTimeString();
+                console.log("[" + timestamp + "] " + message);
+            };
+
+            const updateStatus = (text) => {
+                setText(statusLine, text);
+                log(text);
+            };
+
+            const setButtons = (running) => {
+                startBtn.disabled = running;
+                stopBtn.disabled = !running;
+            };
+
+            const enableDownload = (enable) => {
+                downloadBtn.disabled = !enable;
+            };
+
+            const randomSeed = () => Math.floor(Math.random() * (1 << 24));
+
+            numBlocksInput.addEventListener("input", () => {
+                syncNumBlocksDisplay(numBlocksInput.value);
+            });
+
+            syncNumBlocksDisplay(numBlocksInput.value || numBlocksValue.textContent || 9);
+
+            randomSeedBtn.addEventListener("click", () => {
+                const seed = randomSeed();
+                seedInput.value = seed;
+                log("Seed set to " + seed);
+            });
+
+            playbackSlider.addEventListener("input", () => {
+                playbackFps = Number(playbackSlider.value) || 1;
+                setText(playbackValue, String(playbackFps));
+                if (playbackTimer !== null) {
+                    startPlaybackLoop();
+                }
+            });
+
+            denoisingStrengthInput.addEventListener("input", () => {
+                const value = Number(denoisingStrengthInput.value).toFixed(2);
+                setText(denoisingStrengthValue, value);
+            });
+
+            // Initialize denoising strength display
+            setText(denoisingStrengthValue, Number(denoisingStrengthInput.value).toFixed(2));
+            timestepShiftInput.addEventListener("input", () => {
+                const value = Number(timestepShiftInput.value).toFixed(2);
+                setText(timestepShiftValue, value);
+            });
+            interpStepsInput.addEventListener("input", () => {
+                const value = String(Number(interpStepsInput.value) || 1);
+                setText(interpStepsValue, value);
+            });
+            numDenoisingStepsInput.addEventListener("input", () => {
+                const value = String(Number(numDenoisingStepsInput.value) || 6);
+                setText(numDenoisingStepsValue, value);
+            });
+
+            webcamFpsInput.addEventListener("input", () => {
+                const value = String(Number(webcamFpsInput.value) || 4);
+                setText(webcamFpsValue, value);
+            });
+
+            // Mode switching logic
+            modeRadios.forEach(radio => {
+                radio.addEventListener("change", (e) => {
+                    currentMode = e.target.value;
+                    updateUIForMode();
+                });
+            });
+
+            function updateUIForMode() {
+                if (currentMode === 'webcam') {
+                    webcamContainer.style.display = 'block';
+                    webcamDisplayContainer.style.display = 'block';
+                    videoUploadContainer.style.display = 'none';
+                    if (startFrameContainer) startFrameContainer.style.display = 'none';
+                    denoisingStrengthContainer.style.display = 'flex';
+                    // Auto-start webcam when switching to webcam mode
+                    if (!webcamStream) {
+                        startWebcam();
+                    }
+                } else {
+                    // Stop webcam when switching away from webcam mode
+                    if (webcamStream) {
+                        stopWebcam();
+                    }
+                    webcamContainer.style.display = 'none';
+                    webcamDisplayContainer.style.display = 'none';
+                    videoUploadContainer.style.display = 'block';
+                    if (startFrameContainer) startFrameContainer.style.display = 'block';
+                    if (currentMode === 'video2video' && uploadedVideoPath) {
+                        denoisingStrengthContainer.style.display = 'flex';
+                    } else if (currentMode === 'text2video') {
+                        denoisingStrengthContainer.style.display = 'none';
+                    }
+                }
+            }
+
+            // Webcam control functions
+            async function startWebcam() {
+                try {
+                    webcamStream = await navigator.mediaDevices.getUserMedia({
+                        video: {
+                            width: { ideal: 832 },
+                            height: { ideal: 480 }
+                        }
+                    });
+                    // Set stream for both the hidden capture element and the visible display
+                    webcamPreview.srcObject = webcamStream;
+                    webcamDisplayPreview.srcObject = webcamStream;
+                    log("Webcam started");
+                } catch (error) {
+                    console.error("Error accessing webcam:", error);
+                    updateStatus("Failed to access webcam: " + error.message);
+                }
+            }
+
+            function stopWebcam() {
+                if (webcamStream) {
+                    webcamStream.getTracks().forEach(track => track.stop());
+                    webcamStream = null;
+                    webcamPreview.srcObject = null;
+                    webcamDisplayPreview.srcObject = null;
+                }
+                if (webcamCaptureInterval) {
+                    clearInterval(webcamCaptureInterval);
+                    webcamCaptureInterval = null;
+                }
+                log("Webcam stopped");
+            }
+
+            function captureWebcamFrame() {
+                if (!webcamStream || !websocket || websocket.readyState !== WebSocket.OPEN) {
+                    return;
+                }
+
+                // Create a canvas to capture the frame
+                const canvas = document.createElement('canvas');
+                const targetWidth = Math.round(Number(widthInput.value) / 8) * 8;
+                const targetHeight = Math.round(Number(heightInput.value) / 8) * 8;
+                canvas.width = targetWidth;
+                canvas.height = targetHeight;
+                const ctx = canvas.getContext('2d');
+
+                // Calculate center crop from webcam preview
+                const videoWidth = webcamPreview.videoWidth;
+                const videoHeight = webcamPreview.videoHeight;
+                const videoAspect = videoWidth / videoHeight;
+                const targetAspect = targetWidth / targetHeight;
+
+                let sx, sy, sWidth, sHeight;
+
+                if (videoAspect > targetAspect) {
+                    // Video is wider - crop sides
+                    sHeight = videoHeight;
+                    sWidth = videoHeight * targetAspect;
+                    sx = (videoWidth - sWidth) / 2;
+                    sy = 0;
+                } else {
+                    // Video is taller - crop top/bottom
+                    sWidth = videoWidth;
+                    sHeight = videoWidth / targetAspect;
+                    sx = 0;
+                    sy = (videoHeight - sHeight) / 2;
+                }
+
+                // Draw center-cropped video frame to canvas
+                ctx.drawImage(webcamPreview, sx, sy, sWidth, sHeight, 0, 0, targetWidth, targetHeight);
+
+                // Convert to base64 JPEG
+                canvas.toBlob((blob) => {
+                    const reader = new FileReader();
+                    reader.onloadend = () => {
+                        const base64data = reader.result.split(',')[1];
+
+                        // Send frame via WebSocket
+                        const payload = {
+                            image: base64data,
+                            timestamp: Date.now(),
+                            strength: Number(denoisingStrengthInput.value)
+                        };
+
+                        try {
+                            const encoderCandidate =
+                                (window.msgpack && typeof window.msgpack.encode === "function" && ((value) => window.msgpack.encode(value))) ||
+                                (window.MessagePack && typeof window.MessagePack.encode === "function" && ((value) => window.MessagePack.encode(value))) ||
+                                builtinMsgPackEncode;
+                            const encoded = encoderCandidate(payload);
+                            const payloadBuffer = encoded instanceof Uint8Array
+                                ? encoded
+                                : new Uint8Array(encoded.buffer ? encoded.buffer : encoded);
+                            websocket.send(payloadBuffer);
+                        } catch (error) {
+                            console.error("Failed to send webcam frame", error);
+                        }
+                    };
+                    reader.readAsDataURL(blob);
+                }, 'image/jpeg', 0.90);
+            }
+
+            startFrameInput.addEventListener("change", async () => {
+                const file = startFrameInput.files[0];
+                if (!file) {
+                    uploadedStartFramePath = null;
+                    setText(startFrameStatus, "");
+                    startFramePreview.classList.remove("show");
+                    clearStartFrameBtn.style.display = "none";
+                    return;
+                }
+
+                // Show preview
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    startFramePreviewElement.src = e.target.result;
+                    startFramePreview.classList.add("show");
+                    clearStartFrameBtn.style.display = "inline-block";
+                };
+                reader.readAsDataURL(file);
+
+                setText(startFrameStatus, "Uploading start frame...");
+                const formData = new FormData();
+                formData.append("file", file);
+
+                try {
+                    const response = await fetch("/upload_start_frame", {
+                        method: "POST",
+                        body: formData
+                    });
+
+                    if (!response.ok) {
+                        throw new Error("Upload failed");
+                    }
+
+                    const result = await response.json();
+                    if (result.error) {
+                        throw new Error(result.error);
+                    }
+
+                    uploadedStartFramePath = result.path;
+                    setText(startFrameStatus, "✓ " + result.filename + " uploaded");
+                    log("Start frame uploaded: " + result.filename + " -> " + result.path);
+                } catch (error) {
+                    uploadedStartFramePath = null;
+                    setText(startFrameStatus, "✗ Upload failed: " + error.message);
+                    log("Start frame upload error: " + error.message);
+                    startFramePreview.classList.remove("show");
+                    clearStartFrameBtn.style.display = "none";
+                }
+            });
+
+            clearStartFrameBtn.addEventListener("click", () => {
+                startFrameInput.value = "";
+                uploadedStartFramePath = null;
+                setText(startFrameStatus, "");
+                startFramePreview.classList.remove("show");
+                clearStartFrameBtn.style.display = "none";
+                log("Start frame cleared");
+            });
+
+            inputVideoInput.addEventListener("change", async () => {
+                const file = inputVideoInput.files[0];
+                if (!file) {
+                    uploadedVideoPath = null;
+                    setText(videoStatus, "");
+                    denoisingStrengthContainer.style.display = "none";
+                    videoPreview.classList.remove("show");
+                    clearVideoBtn.style.display = "none";
+                    return;
+                }
+
+                // Show preview
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    videoPreviewElement.src = e.target.result;
+                    videoPreview.classList.add("show");
+                    clearVideoBtn.style.display = "inline-block";
+                };
+                reader.readAsDataURL(file);
+
+                setText(videoStatus, "Uploading video...");
+                const formData = new FormData();
+                formData.append("file", file);
+
+                try {
+                    const response = await fetch("/upload_video", {
+                        method: "POST",
+                        body: formData
+                    });
+
+                    if (!response.ok) {
+                        throw new Error("Upload failed");
+                    }
+
+                    const result = await response.json();
+                    if (result.error) {
+                        throw new Error(result.error);
+                    }
+
+                    uploadedVideoPath = result.path;
+                    setText(videoStatus, "✓ " + result.filename + " uploaded");
+                    log("Video uploaded: " + result.filename + " -> " + result.path);
+                    denoisingStrengthContainer.style.display = "flex";
+                } catch (error) {
+                    uploadedVideoPath = null;
+                    setText(videoStatus, "✗ Upload failed: " + error.message);
+                    log("Video upload error: " + error.message);
+                    denoisingStrengthContainer.style.display = "none";
+                    videoPreview.classList.remove("show");
+                    clearVideoBtn.style.display = "none";
+                }
+            });
+
+            clearVideoBtn.addEventListener("click", () => {
+                inputVideoInput.value = "";
+                uploadedVideoPath = null;
+                setText(videoStatus, "");
+                denoisingStrengthContainer.style.display = "none";
+                videoPreview.classList.remove("show");
+                clearVideoBtn.style.display = "none";
+                log("Video cleared");
+            });
+
+            const closeSocket = (reason) => {
+                if (websocket && (websocket.readyState === WebSocket.OPEN || websocket.readyState === WebSocket.CONNECTING)) {
+                    websocket.close(1000, reason || "client closing");
+                }
+            };
+
+            const drawNextFrame = () => {
+                if (frameBuffer.length === 0) return;
+                const bitmap = frameBuffer.shift();
+                ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+                if (bitmap.close) {
+                    bitmap.close();
+                }
+
+                // Update FPS meter
+                fpsFrameCount++;
+                const now = Date.now();
+                const elapsed = now - fpsLastTime;
+                if (elapsed >= 1000) {
+                    currentFps = (fpsFrameCount / elapsed * 1000).toFixed(1);
+                    console.log(`Generation FPS: ${currentFps}`);
+                    fpsFrameCount = 0;
+                    fpsLastTime = now;
+                }
+            };
+
+            const downloadVideo = async () => {
+                if (!currentSessionId) {
+                    log("No session ID available for download");
+                    return;
+                }
+                
+                // Disable download button while generating MP4
+                downloadBtn.disabled = true;
+                const originalText = downloadBtn.textContent;
+                downloadBtn.textContent = "Generating MP4...";
+                
+                try {
+                    const response = await fetch(`/download_video/${currentSessionId}`);
+                    
+                    if (!response.ok) {
+                        throw new Error('Failed to download video');
+                    }
+                    
+                    const blob = await response.blob();
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.style.display = 'none';
+                    a.href = url;
+                    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+                    a.download = 'generated-video-' + timestamp + '.mp4';
+                    document.body.appendChild(a);
+                    a.click();
+                    
+                    setTimeout(() => {
+                        document.body.removeChild(a);
+                        URL.revokeObjectURL(url);
+                    }, 100);
+                    
+                    log("Video downloaded as MP4");
+                    currentSessionId = null; // Clear session ID after download
+                    downloadBtn.disabled = true; // Disable until next generation
+                } catch (error) {
+                    console.error("Error downloading video:", error);
+                    log("Failed to download video: " + error.message);
+                    downloadBtn.disabled = false; // Re-enable if failed
+                } finally {
+                    downloadBtn.textContent = originalText;
+                }
+            };
+
+            const startPlaybackLoop = () => {
+                stopPlaybackLoop();
+                const intervalMs = Math.max(10, Math.floor(1000 / Math.max(1, playbackFps)));
+                playbackTimer = window.setInterval(drawNextFrame, intervalMs);
+            };
+
+            const stopPlaybackLoop = () => {
+                if (playbackTimer !== null) {
+                    window.clearInterval(playbackTimer);
+                    playbackTimer = null;
+                }
+            };
+
+            const queueFrameDecode = (data) => {
+                decodeQueue = decodeQueue.then(async () => {
+                    if (!data || (data.byteLength !== undefined && data.byteLength === 0)) {
+                        return;
+                    }
+                    const blob = data instanceof Blob ? data : new Blob([data], { type: "image/jpeg" });
+                    try {
+                        const bitmap = await createImageBitmap(blob);
+                        frameBuffer.push(bitmap);
+                    } catch (error) {
+                        console.error("Failed to decode frame", error);
+                        log("Failed to decode frame: " + error.message);
+                    }
+                }).catch((error) => {
+                    console.error("Frame decode pipeline error", error);
+                    log("Frame decode pipeline error: " + error.message);
+                });
+            };
+
+            const sendParams = () => {
+                if (!websocket || websocket.readyState !== WebSocket.OPEN) {
+                    return;
+                }
+                const prompt = promptInput.value.trim();
+                if (!prompt) {
+                    updateStatus("Please enter a prompt before starting generation.");
+                    setButtons(false);
+                    stopPlaybackLoop();
+                    closeSocket("missing prompt");
+                    return;
+                }
+
+                // Webcam mode validation
+                if (currentMode === 'webcam' && !webcamStream) {
+                    updateStatus("Please start the webcam before generating.");
+                    setButtons(false);
+                    stopPlaybackLoop();
+                    closeSocket("webcam not started");
+                    return;
+                }
+
+                const width = Math.max(64, Math.round(Number(widthInput.value) / 8) * 8);
+                const height = Math.max(64, Math.round(Number(heightInput.value) / 8) * 8);
+                widthInput.value = width;
+                heightInput.value = height;
+
+                const payload = {
+                    prompt: prompt,
+                    width: width,
+                    height: height,
+                    num_blocks: Number(numBlocksInput.value),
+                    num_denoising_steps: Number(numDenoisingStepsInput.value),
+                    timestep_shift: Number(timestepShiftInput.value),
+                };
+                syncNumBlocksDisplay(payload.num_blocks);
+
+                // Webcam mode
+                if (currentMode === 'webcam') {
+                    payload.webcam_mode = true;
+                    payload.webcam_fps = Number(webcamFpsInput.value);
+                    payload.strength = Number(denoisingStrengthInput.value);
+
+                    // Start capturing and sending webcam frames
+                    const webcamFps = Number(webcamFpsInput.value);
+                    // Always clear any existing interval first
+                    if (webcamCaptureInterval) {
+                        clearInterval(webcamCaptureInterval);
+                        webcamCaptureInterval = null;
+                        log("Cleared existing webcam capture interval");
+                    }
+                    webcamCaptureInterval = setInterval(captureWebcamFrame, 1000 / webcamFps);
+                    log("Started webcam capture at " + webcamFps + " fps (interval ID: " + webcamCaptureInterval + ")");
+                } else {
+                    // Include uploaded video path if available
+                    if (uploadedVideoPath) {
+                        payload.input_video = uploadedVideoPath;
+                        payload.strength = Number(denoisingStrengthInput.value);
+                    }
+
+                    // Include uploaded start frame path if available
+                    if (uploadedStartFramePath) {
+                        payload.start_frame = uploadedStartFramePath;
+                    }
+                }
+
+                const rawSeed = seedInput.value.trim();
+                if (rawSeed !== "") {
+                    const numericSeed = Number(rawSeed);
+                    if (!Number.isNaN(numericSeed) && Number.isFinite(numericSeed)) {
+                        payload.seed = Math.floor(numericSeed);
+                    }
+                }
+
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                frameBuffer = [];
+                decodeQueue = Promise.resolve();
+                playbackFps = Number(playbackSlider.value) || 8;
+                setText(playbackValue, String(playbackFps));
+                startPlaybackLoop();
+
+                fpsFrameCount = 0;
+                fpsLastTime = Date.now();
+                currentFps = 0;
+
+                try {
+                    const encoderCandidate =
+                        (window.msgpack && typeof window.msgpack.encode === "function" && ((value) => window.msgpack.encode(value))) ||
+                        (window.MessagePack && typeof window.MessagePack.encode === "function" && ((value) => window.MessagePack.encode(value))) ||
+                        builtinMsgPackEncode;
+                    const encoded = encoderCandidate(payload);
+                    const payloadBuffer = encoded instanceof Uint8Array
+                        ? encoded
+                        : new Uint8Array(encoded.buffer ? encoded.buffer : encoded);
+                    websocket.send(payloadBuffer);
+                    updateStatus("Generation request sent.");
+                } catch (error) {
+                    console.error("Failed to encode parameters", error);
+                    updateStatus("Failed to encode parameters: " + error.message);
+                }
+            };
+
+            const startGeneration = () => {
+                if (websocket && (websocket.readyState === WebSocket.OPEN || websocket.readyState === WebSocket.CONNECTING)) {
+                    closeSocket("restarting");
+                }
+
+
+                currentSessionId = (window.crypto && window.crypto.randomUUID)
+                    ? window.crypto.randomUUID()
+                    : Math.random().toString(36).slice(2, 10);
+
+                const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+                const endpoint = protocol + "://" + window.location.host + "/session/" + currentSessionId;
+                updateStatus("Connecting to " + endpoint);
+                setButtons(true);
+                stopPlaybackLoop();
+                // Reset download button state when starting a new session
+                enableDownload(false);
+
+                websocket = new WebSocket(endpoint);
+                websocket.binaryType = "arraybuffer";
+
+                websocket.addEventListener("open", () => {
+                    updateStatus("Connected. Waiting for worker...");
+                });
+
+                websocket.addEventListener("message", (event) => {
+                    if (typeof event.data === "string") {
+                        try {
+                            const message = JSON.parse(event.data);
+                            if (message.worker) {
+                                log("Worker: " + message.worker);
+                            }
+                            if (message.status === "ready") {
+                                updateStatus("Worker ready. Sending parameters...");
+                                sendParams();
+                            } else if (message.status === "completed" || message.session_id) {
+                                // Server indicates the video is ready to download
+                                if (message.session_id) {
+                                    currentSessionId = message.session_id;
+                                }
+                                enableDownload(true);
+                                updateStatus("Generation completed. Video ready to download.");
+
+                                // Stop webcam capture if in webcam mode
+                                if (currentMode === 'webcam' && webcamCaptureInterval) {
+                                    clearInterval(webcamCaptureInterval);
+                                    webcamCaptureInterval = null;
+                                    log("Webcam capture stopped (generation completed)");
+                                }
+
+                                // Re-enable Start button for new generation, disable Stop
+                                setButtons(false);
+                            } else if (message.error) {
+                                updateStatus("Server error: " + message.error);
+                                setButtons(false);
+                            } else if (typeof message.status === "string") {
+                                updateStatus(message.status);
+                            }
+                        } catch (error) {
+                            log("Text message: " + event.data);
+                        }
+                        return;
+                    }
+
+                    const buffer = event.data instanceof ArrayBuffer ? event.data : event.data.buffer;
+                    queueFrameDecode(buffer);
+                    // As soon as a frame arrives, enable download (server stores frames by session)
+                    if (currentSessionId) {
+                        enableDownload(true);
+                    }
+                });
+
+                websocket.addEventListener("close", (event) => {
+                    updateStatus("Session ended (" + event.code + ").");
+                    setButtons(false);
+                    decodeQueue = Promise.resolve();
+                    frameBuffer = [];
+                    stopPlaybackLoop();
+                    // Enable download button after generation completes
+                    if (currentSessionId) {
+                        enableDownload(true);
+                    }
+                });
+
+                websocket.addEventListener("error", () => {
+                    updateStatus("WebSocket error. Check server logs.");
+                    stopPlaybackLoop();
+                });
+            };
+
+            const sendPromptUpdate = () => {
+                if (!websocket || websocket.readyState !== WebSocket.OPEN) {
+                    return;
+                }
+                const prompt = promptInput.value.trim();
+                const steps = Number(interpStepsInput.value) || 4;
+                const payload = { prompt, interp_steps: steps };
+                try {
+                    const encoderCandidate =
+                        (window.msgpack && typeof window.msgpack.encode === "function" && ((value) => window.msgpack.encode(value))) ||
+                        (window.MessagePack && typeof window.MessagePack.encode === "function" && ((value) => window.MessagePack.encode(value))) ||
+                        builtinMsgPackEncode;
+                    const encoded = encoderCandidate(payload);
+                    const payloadBuffer = encoded instanceof Uint8Array
+                        ? encoded
+                        : new Uint8Array(encoded.buffer ? encoded.buffer : encoded);
+                    websocket.send(payloadBuffer);
+                    updateStatus("Applied prompt update.");
+                } catch (error) {
+                    console.error("Failed to encode prompt update", error);
+                }
+            };
+
+            applyPromptBtn.addEventListener("click", sendPromptUpdate);
+            promptInput.addEventListener("keydown", (e) => {
+                if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+                    e.preventDefault();
+                    sendPromptUpdate();
+                }
+            });
+
+            const stopGeneration = () => {
+                if (!websocket) {
+                    return;
+                }
+                updateStatus("Stopping session.");
+                closeSocket("stopped by user");
+                setButtons(false);
+                stopPlaybackLoop();
+
+                // Stop webcam capture if running
+                if (webcamCaptureInterval) {
+                    clearInterval(webcamCaptureInterval);
+                    webcamCaptureInterval = null;
+                    log("Stopped webcam capture");
+                }
+
+                // Enable download button after stop
+                if (currentSessionId) {
+                    enableDownload(true);
+                }
+            };
+
+            startBtn.addEventListener("click", startGeneration);
+            stopBtn.addEventListener("click", stopGeneration);
+            downloadBtn.addEventListener("click", downloadVideo);
+            window.addEventListener("beforeunload", () => closeSocket("page exit"));
+        })();
+    </script>
+</body>
+</html>
