@@ -12,9 +12,7 @@ from pathlib import Path
 import time
 from tqdm import tqdm
 import traceback
-import nvtx
 
-# Import from your codebase
 from v2v import encode_video_latent, get_denoising_schedule
 from utils.scheduler import FlowMatchScheduler
 from utils.wan_wrapper import WanDiffusionWrapper, WanTextEncoder
@@ -23,7 +21,6 @@ from pipeline import CausalInferencePipeline
 from wan.modules.vae import WanVAE
 from utils.misc import AtomicCounter
 import gc
-
 from quack.linear import Linear as QuackLinear
 from quack.linear import linear_func
 
@@ -84,7 +81,6 @@ def replace_transformer_mlp_linears(model, name_prefix=""):
             replaced += replace_transformer_mlp_linears(child, full_name)
     return replaced
 
-
 def load_merge_config(config_path: str | Path) -> OmegaConf:
     config = OmegaConf.load(config_path)
     default_config = OmegaConf.load("configs/default_config.yaml")
@@ -101,7 +97,6 @@ def load_transformer(config):
     state_dict = load_file(checkpoint_path, device="cuda")
     model_name = "Wan2.1-T2V-1.3B" if state_dict["model.blocks.0.self_attn.k.weight"].shape[0] == 1536 else "Wan2.1-T2V-14B"
     timestep_shift = getattr(config, "timestep_shift", 5.0)
-    print(f"🔧 Loading WAN model: {model_name}")
     transformer = WanDiffusionWrapper(model_name=model_name, timestep_shift=timestep_shift, is_causal=True)
     transformer.load_state_dict(state_dict)
     transformer = transformer.to(dtype=torch.bfloat16).eval().requires_grad_(False)
@@ -141,7 +136,6 @@ def compile_models(models: Models):
     #models.transformer = torch.compile(models.transformer)
 
 def load_all(config: OmegaConf):
-    print("Loading models...")
     transformer = load_transformer(config)
     text_encoder = load_text_encoder()
     vae_encoder, vae_decoder = load_vae()
@@ -200,9 +194,6 @@ class GenerationSession:
         num_latent_frames = self.num_blocks * self.num_frame_per_block
         latent_shape = [1, num_latent_frames, 16, self.latent_height, self.latent_width]
         self.all_latents = torch.zeros(latent_shape, device=self.gpu, dtype=torch.bfloat16).contiguous()
-        #self.all_latents = torch.zeros((1, self.params.num_frames, *self.params.latent_shape), device=self.gpu, dtype=torch.bfloat16)
-        self.transformer_stream = torch.cuda.Stream()
-        self.vae_stream = torch.cuda.Stream()
         self.noise = torch.randn(latent_shape, device=self.gpu, dtype=torch.bfloat16, generator=self.rnd).contiguous()
         self.init_models(models, params)
         self.decode_vae_cache = [None] * 55
@@ -268,38 +259,48 @@ class GenerationSession:
 
     @torch.inference_mode()
     def generate_block(self, models):
+        print("here")
         if self.block_idx >= self.num_blocks:
             return None
         if self.block_idx == 0:
-            with nvtx.annotate("text_encoding", color="red"):
-                self.conditional_dict = models.text_encoder(text_prompts=[self.params.prompt])
-                for k, v in self.conditional_dict.items():
-                    self.conditional_dict[k] = v.to(dtype=torch.bfloat16)
-    
-        with nvtx.annotate("recompute_kv_cache", color="blue"):
-            self.recompute_kv_cache(models)
+            self.conditional_dict = models.text_encoder(text_prompts=[self.params.prompt])
+            for k, v in self.conditional_dict.items():
+                self.conditional_dict[k] = v.to(dtype=torch.bfloat16).contiguous()
+        self.recompute_kv_cache(models)
         noisy_input = self.noise[:, self.current_start_frame:self.current_start_frame + models.pipeline.num_frame_per_block]
-    
-        with nvtx.annotate("denoising_loop", color="green"):
-            for index, current_timestep in enumerate(self.denoising_step_list):
-                timestep = torch.full([1, models.pipeline.num_frame_per_block], current_timestep, device=self.gpu, dtype=torch.int64)
-                with nvtx.annotate(f"transformer_step_{index}", color="yellow"):
-                    with torch.cuda.stream(self.transformer_stream):
-                        if index < len(self.denoising_step_list) - 1:
-                            _, denoised_pred = models.transformer(noisy_input, self.conditional_dict, timestep, kv_cache=models.pipeline.kv_cache1)
-                            next_timestep = self.denoising_step_list[index + 1]
-                            noisy_input = models.pipeline.scheduler.add_noise(denoised_pred.flatten(0, 1), torch.randn_like(denoised_pred.flatten(0, 1), device="cuda", dtype=torch.bfloat16), next_timestep)
-                        else:
-                            _, denoised_pred = models.transformer(noisy_input, self.conditional_dict, timestep, kv_cache=models.pipeline.kv_cache1)
-    
-        with nvtx.annotate("vae_decode", color="purple"):
-            with torch.cuda.stream(self.vae_stream):
-                self.all_latents[:, self.current_start_frame:self.current_start_frame + models.pipeline.num_frame_per_block] = denoised_pred
-                pixels = models.vae_decoder(denoised_pred.half())
-    
-        with nvtx.annotate("video_save", color="orange"):
-            save_video_async(pixels, vid_path, fps)
-    
+        for index, current_timestep in enumerate(self.denoising_step_list):
+            timestep = torch.full([1, models.pipeline.num_frame_per_block], current_timestep, device=self.gpu, dtype=torch.int64)
+            if index < len(self.denoising_step_list) - 1:
+                _, denoised_pred = models.transformer(
+                    noisy_image_or_video=noisy_input,
+                    conditional_dict=self.conditional_dict,
+                    timestep=timestep,
+                    kv_cache=models.pipeline.kv_cache1,
+                    crossattn_cache=models.pipeline.crossattn_cache,
+                    current_start=min(self.current_start_frame, self.params.kv_cache_num_frames) * models.pipeline.frame_seq_length
+                )
+                next_timestep = self.denoising_step_list[index + 1]
+                noisy_input = self.models.pipeline.scheduler.add_noise(
+                        denoised_pred.flatten(0, 1),
+                        torch.randn(*denoised_pred.flatten(0, 1).shape, generator=self.rnd, device="cuda", dtype=torch.bfloat16),
+                        next_timestep * torch.ones([1 * self.models.pipeline.num_frame_per_block], device="cuda", dtype=torch.long)
+                    ).unflatten(0, denoised_pred.shape[:2])
+            else:
+                _, denoised_pred = models.transformer(
+                    noisy_image_or_video=noisy_input,
+                    conditional_dict=self.conditional_dict,
+                    timestep=timestep,
+                    kv_cache=models.pipeline.kv_cache1,
+                    crossattn_cache=models.pipeline.crossattn_cache,
+                    current_start=min(self.current_start_frame, self.params.kv_cache_num_frames) * models.pipeline.frame_seq_length
+                )
+        self.all_latents[:, self.current_start_frame:self.current_start_frame + models.pipeline.num_frame_per_block] = denoised_pred
+        pixels, self.decode_vae_cache = models.vae_decoder(denoised_pred.half(), *self.decode_vae_cache)
+        if self.block_idx == 0:
+            pixels = pixels[:, 3:, :, :, :]
+        event = torch.cuda.Event()
+        event.record()
+        self.frame_callback(pixels, [], event)
         self.current_start_frame += models.pipeline.num_frame_per_block
         self.block_idx += 1
 
@@ -380,10 +381,4 @@ if __name__ == "__main__":
         num_blocks=9,
         seed=42,
         output_dir="outputs/quack_test"
-    )
-    sample_videos(
-        prompts_list=prompts,
-        num_blocks=9,
-        seed=42,
-        output_dir="outputs/quack_test",
     )
