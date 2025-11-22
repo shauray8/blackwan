@@ -18,7 +18,7 @@ uv sync
 
 ### 2. Install Attention Backend
 
-**For NVIDIA B200 GPUs** (recommended):
+**For NVIDIA B200 GPUs** (recommended) Even though it uses flash-attn from source still it breaks if you dont install this:
 ```bash
 uv pip install flash_attn --no-build-isolation
 ```
