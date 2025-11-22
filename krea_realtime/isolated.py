@@ -7,7 +7,6 @@ import time
 from tqdm import tqdm
 import traceback
 
-# Import from your codebase
 from v2v import encode_video_latent, get_denoising_schedule
 from utils.scheduler import FlowMatchScheduler
 from utils.wan_wrapper import WanDiffusionWrapper, WanTextEncoder
@@ -16,7 +15,11 @@ from pipeline import CausalInferencePipeline
 from wan.modules.vae import WanVAE
 from utils.misc import AtomicCounter
 import gc
-# Assume these are defined as in your file
+import subprocess, tempfile, os, numpy as np
+from utils.wan_wrapper import WanTextEncoder
+from demo_utils.vae_block3 import VAEDecoderWrapper
+from pipeline import CausalInferencePipeline
+
 class Models:
     def __init__(self, text_encoder, transformer, pipeline, vae_encoder, vae_decoder):
         self.text_encoder = text_encoder
@@ -25,14 +28,12 @@ class Models:
         self.vae_encoder = vae_encoder
         self.vae_decoder = vae_decoder
 
-# Exact functions from your file (no changes)
 def load_merge_config(config_path: str | Path) -> OmegaConf:
     config = OmegaConf.load(config_path)
     default_config = OmegaConf.load("configs/default_config.yaml")
     return OmegaConf.merge(default_config, config)
 
 def load_text_encoder():
-    from utils.wan_wrapper import WanTextEncoder
     text_encoder = WanTextEncoder()
     text_encoder.eval().to(dtype=torch.bfloat16).requires_grad_(False)
     return text_encoder.to(torch.cuda.current_device())
@@ -50,7 +51,6 @@ def load_transformer(config):
     return transformer.to(torch.cuda.current_device())
 
 def load_vae():
-    from demo_utils.vae_block3 import VAEDecoderWrapper
     vae_path = "wan_models/Wan2.1-T2V-1.3B/Wan2.1_VAE.pth"
     vae = WanVAE(vae_pth=vae_path, dtype=torch.float16)
     vae_encoder = VAEEncoderWrapper(vae).eval().to(dtype=torch.float16).requires_grad_(False)
@@ -62,7 +62,6 @@ def load_vae():
     return vae_encoder.to("cuda"), vae_decoder.to("cuda")
 
 def load_pipeline(config, device, transformer, text_encoder, vae_decoder):
-    from pipeline import CausalInferencePipeline
     return CausalInferencePipeline(config, device=device, generator=transformer, text_encoder=text_encoder, vae=vae_decoder)
 
 def compile_models(models: Models):
@@ -83,10 +82,8 @@ def load_all(config: OmegaConf):
     torch.cuda.empty_cache()
     return models
 
-# Exact GenerationSession from your file (with only minimal trimming of unused attrs)
 class GenerateParams:
     def __init__(self, **kwargs):
-        # Required
         self.prompt = kwargs.get("prompt", "")
         self.width = kwargs.get("width", 1280)
         self.height = kwargs.get("height", 720)
@@ -105,7 +102,6 @@ class GenerateParams:
         self.request_id = None
         self.interp_blocks = -1
 
-# Reuse exact GenerationSession logic (copied from your file, trimmed only of WebSocket-specific parts)
 class GenerationSession:
     SESSION_COUNTER = AtomicCounter()
     @torch.inference_mode()
@@ -234,14 +230,12 @@ class GenerationSession:
                     current_start=min(self.current_start_frame, self.params.kv_cache_num_frames) * models.pipeline.frame_seq_length
                 )
         self.all_latents[:, self.current_start_frame:self.current_start_frame + models.pipeline.num_frame_per_block] = denoised_pred
-        # Decode and callback (only if needed)
-        #pixels, _ = models.vae_decoder(denoised_pred.half())
         pixels, self.decode_vae_cache = models.vae_decoder(
             denoised_pred.half(),
             *self.decode_vae_cache
         )
         if self.block_idx == 0:
-            pixels = pixels[:, 3:, :, :, :]  # skip first 3
+            pixels = pixels[:, 3:, :, :, :] 
         event = torch.cuda.Event()
         event.record()
         self.frame_callback(pixels, [], event)
@@ -251,10 +245,8 @@ class GenerationSession:
     def dispose(self):
         pass
 
-# Video saving (minimal, only if ffmpeg available)
 def save_video_direct(pixels: torch.Tensor, output_path: Path, fps: int = 16):
     try:
-        import subprocess, tempfile, os, numpy as np
         pixels = pixels[0].cpu().clamp(0, 1)  # [T, 3, H, W]
         frames_np = (pixels.permute(0, 2, 3, 1).numpy() * 255).astype(np.uint8)
         with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
@@ -274,7 +266,6 @@ def save_video_direct(pixels: torch.Tensor, output_path: Path, fps: int = 16):
         print(f"Failed to save video: {e}")
         return None
 
-# Final API: sample_videos (now fully offline)
 def sample_videos(
     prompts_list,
     config_path: str = "configs/self_forcing_server_14b.yaml",
@@ -292,14 +283,12 @@ def sample_videos(
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
-    print("🔄 Loading models...")
     config = load_merge_config(config_path)
     models = load_all(config)
-    print("✅ Models loaded")
+    print("Models loaded")
 
     results = {}
     for prompt_idx, prompt in enumerate(tqdm(prompts_list, desc="Generating")):
-        print(f"\n📝 Prompt {prompt_idx + 1}: {prompt}")
         all_frames = []
         def frame_callback(pixels, frame_ids, event):
             event.synchronize()
@@ -320,7 +309,7 @@ def sample_videos(
         t0 = time.time()
         for _ in range(num_blocks):
             session.generate_block(models)
-        print(f"✅ Done in {time.time() - t0:.2f}s")
+        print(f"Done in {time.time() - t0:.2f}s")
 
         combined = torch.cat(all_frames, dim=1) if all_frames else torch.empty(0)
         result = {"prompt": prompt, "num_frames": combined.shape[1], "video_path": None}
@@ -330,21 +319,12 @@ def sample_videos(
         results[prompt_idx] = result
         session.dispose()
 
-    print("\n🎉 All done!")
     return results
 
-# Example usage
 if __name__ == "__main__":
     prompts = [
         "a red panda skateboarding at sunset",
     ]
-    sample_videos(
-        prompts_list=prompts,
-        num_blocks=9,
-        seed=42,
-        output_dir="outputs/demo",
-        save_videos=True
-    )
     sample_videos(
         prompts_list=prompts,
         num_blocks=9,

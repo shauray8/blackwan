@@ -7,10 +7,16 @@ import time
 from tqdm import tqdm
 import os
 import numpy as np
+import subprocess, tempfile
+from utils.wan_wrapper import WanTextEncoder
+from utils.wan_wrapper import WanDiffusionWrapper
 
-# ==============================
-# FP4 KV CACHE QUANTIZATION (Self-contained)
-# ==============================
+from demo_utils.vae_block3 import VAEEncoderWrapper, VAEDecoderWrapper
+from wan.modules.vae import WanVAE
+from pipeline import CausalInferencePipeline
+
+from v2v import get_denoising_schedule
+from utils.scheduler import FlowMatchScheduler
 
 def pack_int4_to_int8(x_int4: torch.Tensor) -> torch.Tensor:
     assert x_int4.dtype == torch.int8
@@ -44,9 +50,6 @@ def dequantize_from_fp4_e2m1(x_packed: torch.Tensor, scale: torch.Tensor, shape:
     x_int4 = unpack_int8_to_int4(x_packed, shape)
     return (x_int4.to(scale.dtype) * scale).reshape(shape)
 
-# ==============================
-# MODEL LOADING (Exact from original)
-# ==============================
 
 def load_merge_config(config_path: str | Path) -> OmegaConf:
     config = OmegaConf.load(config_path)
@@ -62,7 +65,6 @@ class Models:
         self.vae_decoder = vae_decoder
 
 def load_text_encoder():
-    from utils.wan_wrapper import WanTextEncoder
     text_encoder = WanTextEncoder()
     text_encoder.eval().to(dtype=torch.bfloat16).requires_grad_(False)
     return text_encoder.to(torch.cuda.current_device())
@@ -72,7 +74,6 @@ def load_transformer(config):
     state_dict = load_file(checkpoint_path, device="cuda")
     model_name = "Wan2.1-T2V-1.3B" if state_dict["model.blocks.0.self_attn.k.weight"].shape[0] == 1536 else "Wan2.1-T2V-14B"
     timestep_shift = getattr(config, "timestep_shift", 5.0)
-    from utils.wan_wrapper import WanDiffusionWrapper
     transformer = WanDiffusionWrapper(model_name=model_name, timestep_shift=timestep_shift, is_causal=True)
     transformer.load_state_dict(state_dict)
     transformer = transformer.to(dtype=torch.bfloat16).eval().requires_grad_(False)
@@ -82,8 +83,6 @@ def load_transformer(config):
     return transformer
 
 def load_vae():
-    from demo_utils.vae_block3 import VAEEncoderWrapper, VAEDecoderWrapper
-    from wan.modules.vae import WanVAE
     vae_path = os.path.join(os.getenv("MODEL_FOLDER", "wan_models"), "Wan2.1-T2V-1.3B", "Wan2.1_VAE.pth")
     vae = WanVAE(vae_pth=vae_path, dtype=torch.float16)
     vae_encoder = VAEEncoderWrapper(vae).eval().to(dtype=torch.float16).requires_grad_(False).to("cuda")
@@ -95,7 +94,6 @@ def load_vae():
     return vae_encoder, vae_decoder
 
 def load_pipeline(config, device, transformer, text_encoder, vae_decoder):
-    from pipeline import CausalInferencePipeline
     return CausalInferencePipeline(config, device=device, generator=transformer, text_encoder=text_encoder, vae=vae_decoder)
 
 def load_all(config: OmegaConf):
@@ -105,12 +103,7 @@ def load_all(config: OmegaConf):
     pipeline = load_pipeline(config, torch.cuda.current_device(), transformer, text_encoder, vae_decoder)
     return Models(text_encoder, transformer, pipeline, vae_encoder, vae_decoder)
 
-# ==============================
-# ORIGINAL INFERENCE LOGIC (with FP4 KV hook)
-# ==============================
 
-from v2v import get_denoising_schedule
-from utils.scheduler import FlowMatchScheduler
 
 class GenerateParams:
     def __init__(self, **kwargs):
@@ -207,7 +200,6 @@ class GenerationSession:
         context_timestep = torch.zeros([clean_context_frames.shape[0], clean_context_frames.shape[1]], dtype=torch.int64, device=self.gpu)
         models.pipeline.generator.model.block_mask = block_mask
     
-        # Warm-up forward: this POPULATES models.pipeline.kv_cache1
         models.transformer(
             noisy_image_or_video=clean_context_frames,
             conditional_dict=self.conditional_dict,
@@ -217,14 +209,12 @@ class GenerationSession:
             current_start=min(self.current_start_frame, self.params.kv_cache_num_frames) * models.pipeline.frame_seq_length,
         )
     
-        # >>> QUANTIZE THE PIPELINE'S KV CACHE <<<
         k_cache, v_cache = models.pipeline.kv_cache1
         self.fp4_kv_quant = (
             quantize_to_fp4_e2m1(k_cache),
             quantize_to_fp4_e2m1(v_cache)
         )
         self.kv_cache_shape = k_cache.shape
-        # Optional: delete to save memory (but you must restore before next use)
         models.pipeline.kv_cache1 = None
     
         models.pipeline.generator.model.block_mask = None
@@ -245,7 +235,6 @@ class GenerationSession:
 
         self.recompute_kv_cache(models)
 
-        # >>> FP4 DEQUANTIZE KV CACHE <<<
         for block in models.pipeline.generator.model.blocks:
             if hasattr(block.self_attn, 'kv_cache_quant') and block.self_attn.kv_cache_quant is not None:
                 (k_packed, k_scale), (v_packed, v_scale) = block.self_attn.kv_cache_quant
@@ -284,7 +273,6 @@ class GenerationSession:
                 )
         self.all_latents[:, self.current_start_frame:self.current_start_frame + models.pipeline.num_frame_per_block] = denoised_pred
 
-        # VAE decode (exact as original)
         pixels, self.decode_vae_cache = models.vae_decoder(denoised_pred.half(), *self.decode_vae_cache)
         if self.block_idx == 0:
             pixels = pixels[:, 3:, :, :, :]
@@ -295,13 +283,8 @@ class GenerationSession:
         self.current_start_frame += models.pipeline.num_frame_per_block
         self.block_idx += 1
 
-# ==============================
-# VIDEO SAVE + MAIN
-# ==============================
-
 def save_video_direct(pixels: torch.Tensor, output_path: Path, fps: int = 16):
     try:
-        import subprocess, tempfile
         pixels = pixels[0].cpu().clamp(0, 1)
         frames_np = (pixels.permute(0, 2, 3, 1).numpy() * 255).astype(np.uint8)
         with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
@@ -338,10 +321,9 @@ def sample_videos(
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
-    print("🔄 Loading models...")
     config = load_merge_config(config_path)
     models = load_all(config)
-    print("✅ Models loaded")
+    print("Models loaded")
 
     results = {}
     for prompt_idx, prompt in enumerate(tqdm(prompts_list, desc="Generating")):
@@ -366,7 +348,7 @@ def sample_videos(
         for _ in range(num_blocks):
             session.generate_block(models)
         t1 = time.time()
-        print(f"✅ Prompt {prompt_idx} done in {t1 - t0:.2f}s")
+        print(f"Prompt {prompt_idx} done in {t1 - t0:.2f}s")
 
         combined = torch.cat(all_frames, dim=1) if all_frames else torch.empty(0)
         result = {"prompt": prompt, "num_frames": combined.shape[1], "video_path": None}
@@ -375,12 +357,7 @@ def sample_videos(
             result["video_path"] = save_video_direct(combined, vid_path, fps=fps)
         results[prompt_idx] = result
 
-    print("\n🎉 All done!")
     return results
-
-# ==============================
-# RUN
-# ==============================
 
 if __name__ == "__main__":
     prompts = ["a cat skateboarding in cyberpunk Tokyo"]
